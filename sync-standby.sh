@@ -48,11 +48,24 @@ for t in "${TGTS[@]}"; do
   fi
   log "target #$idx dump fetched + verified ($(du -h "$f" | cut -f1))"
 
-  # wipe standby objects, then load. --no-owner/--no-privileges so it loads under
-  # the standby's role. redact paths/dump names from any error before logging (public repo).
-  if ! rerr="$(pg_restore --clean --if-exists --no-owner --no-privileges --no-comments \
+  # Clean slate: drop the app schema(s) wholesale (CASCADE clears the FK web in one
+  # shot) so the load never hits per-object drop-order errors. Discover schemas
+  # dynamically — keep system + public, drop the rest — so no project schema name
+  # lives in this public repo. The dump recreates its own schema(s) on restore.
+  schemas="$(psql "$url" -Atc "SELECT nspname FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema','pg_toast','public') AND nspname NOT LIKE 'pg_temp%' AND nspname NOT LIKE 'pg_toast_temp%';" 2>/dev/null || true)"
+  if [ -n "$schemas" ]; then
+    while IFS= read -r s; do
+      [ -z "$s" ] && continue
+      psql "$url" -q -c "DROP SCHEMA IF EXISTS \"$s\" CASCADE;" >/dev/null 2>&1 || true
+    done <<< "$schemas"
+  fi
+
+  # Load atomically: --single-transaction = all-or-nothing, standby never left half-built.
+  # --no-owner/--no-privileges so it loads under the standby's role. Redact paths,
+  # schema-qualified identifiers, and dump names from any error before logging (public repo).
+  if ! rerr="$(pg_restore --no-owner --no-privileges --no-comments --single-transaction \
         -d "$url" "$f" 2>&1 >/dev/null)"; then
-    safe="$(printf '%s' "$rerr" | sed -E 's#/[^[:space:]]*##g; s#[[:alnum:]_]+\.dump##g' | tr '\n' ' ')"
+    safe="$(printf '%s' "$rerr" | sed -E 's#/[^[:space:]]*##g; s/[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*//g; s#[[:alnum:]_]+\.dump##g' | tr '\n' ' ')"
     log "ERROR: restore failed for target #$idx: ${safe}"
     rm -f "$f"; fail=1; continue
   fi
