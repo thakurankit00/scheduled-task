@@ -43,8 +43,12 @@ for pair in "${PAIRS[@]}"; do
   fi
 
   # verify archive is readable before trusting/uploading it
-  if ! pg_restore --list "$file" >/dev/null 2>&1; then
-    log "ERROR: verify failed for target #$idx — not uploading"; rm -f "$file"; fail=1; continue
+  bytes=$(stat -c%s "$file" 2>/dev/null || echo 0)
+  if ! verr="$(pg_restore --list "$file" 2>&1 >/dev/null)"; then
+    # redact paths / *.dump names before logging (public repo)
+    safe="$(printf '%s' "$verr" | sed -E 's#/[^[:space:]]*##g; s#[[:alnum:]_]+\.dump##g' | tr '\n' ' ')"
+    log "ERROR: verify failed for target #$idx (${bytes} bytes): ${safe}"
+    rm -f "$file"; fail=1; continue
   fi
   log "target #$idx dump OK ($(du -h "$file" | cut -f1))"
 
