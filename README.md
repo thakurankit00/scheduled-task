@@ -58,7 +58,7 @@ wiping existing objects first.
    summary, and the URL has a password): add/update
    `RESTORE_TARGET_URL` = `postgres://user:pass@host:port/db?sslmode=require`.
 2. Actions → `db-restore` → **Run workflow**:
-   - `source_file` = path under `RCLONE_DEST`, e.g. `MAYFAIR_DEV/mayfairdb_20260623_080623.dump`
+   - `source_file` = path under `RCLONE_DEST`, e.g. `folder/filename.dump`
    - `confirm` = `RESTORE`
 3. It downloads + verifies the dump, then `pg_restore --clean --if-exists` into
    the target.
