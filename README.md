@@ -49,7 +49,25 @@ take over. A run should show, per target: `dump OK` → `uploaded` → `pruned`.
 
 > GitHub may delay/skip scheduled runs under load — `*/30` is best-effort, not an SLA.
 
-## Restore (disaster recovery)
+## Restore — one-click (panic mode)
+
+`db-restore` workflow: pulls a dump from Drive and restores it into a target DB,
+wiping existing objects first.
+
+1. **Set the target as a secret** (NOT an input — inputs leak in the public run
+   summary, and the URL has a password): add/update
+   `RESTORE_TARGET_URL` = `postgres://user:pass@host:port/db?sslmode=require`.
+2. Actions → `db-restore` → **Run workflow**:
+   - `source_file` = path under `RCLONE_DEST`, e.g. `MAYFAIR_DEV/mayfairdb_20260623_080623.dump`
+   - `confirm` = `RESTORE`
+3. It downloads + verifies the dump, then `pg_restore --clean --if-exists` into
+   the target.
+
+> The target URL is masked in logs. `--clean --if-exists` drops the dump's
+> objects before loading — point it at a recovery instance, not a live DB you
+> still need.
+
+## Restore — manual (CLI)
 
 ```bash
 rclone ls "<RCLONE_DEST>/<SUBFOLDER>"                       # list dumps

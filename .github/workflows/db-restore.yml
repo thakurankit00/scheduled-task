@@ -1,0 +1,84 @@
+name: db-restore
+
+# DISASTER RECOVERY — pull a dump from Drive and restore it into a target DB,
+# wiping existing objects first. Manual only.
+#
+# SAFETY (public repo): the target DB URL carries a password, so it is a SECRET
+# (RESTORE_TARGET_URL), NEVER an input — inputs show in the world-readable run
+# summary. Only the source filename is typed in.
+#
+# Required secrets: RESTORE_TARGET_URL, RCLONE_DEST, RCLONE_CONF_B64
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_file:
+        description: 'Dump path under RCLONE_DEST, e.g. MAYFAIR_DEV/mayfairdb_20260623_080623.dump'
+        required: true
+      confirm:
+        description: 'Type RESTORE to confirm (this WIPES the target DB)'
+        required: true
+
+concurrency:
+  group: db-restore
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Confirm gate
+        run: |
+          set -euo pipefail
+          [ "${{ inputs.confirm }}" = "RESTORE" ] || { echo "confirm != RESTORE — aborting"; exit 1; }
+
+      - name: Install postgresql-client-18 + rclone
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo tee /usr/share/keyrings/pgdg.asc > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+
+      - name: Write rclone config
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/rclone"
+          echo "${{ secrets.RCLONE_CONF_B64 }}" | base64 -d > "$HOME/.config/rclone/rclone.conf"
+          test -s "$HOME/.config/rclone/rclone.conf"
+
+      - name: Download dump from Drive
+        env:
+          RCLONE_CONFIG: /home/runner/.config/rclone/rclone.conf
+          RCLONE_DEST: ${{ secrets.RCLONE_DEST }}
+          SOURCE_FILE: ${{ inputs.source_file }}
+        run: |
+          set -euo pipefail
+          mkdir -p ./restore
+          rclone copy "${RCLONE_DEST}/${SOURCE_FILE}" ./restore/ --no-traverse
+          f="./restore/$(basename "$SOURCE_FILE")"
+          test -s "$f" || { echo "downloaded file missing/empty"; exit 1; }
+          # verify the archive before touching the target
+          pg_restore --list "$f" >/dev/null
+          echo "downloaded $(du -h "$f" | cut -f1), archive valid"
+
+      - name: Restore into target (wipe existing objects, then load)
+        env:
+          PGSSLMODE: require
+          TARGET_URL: ${{ secrets.RESTORE_TARGET_URL }}
+          SOURCE_FILE: ${{ inputs.source_file }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${TARGET_URL}"
+          f="./restore/$(basename "$SOURCE_FILE")"
+          # --clean --if-exists drops existing objects from the dump's namespace first,
+          # then restores. --no-owner/--no-privileges so it loads under the target's role.
+          pg_restore --clean --if-exists --no-owner --no-privileges --no-comments \
+            -d "$TARGET_URL" "$f"
+          echo "restore complete"
