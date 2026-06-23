@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install postgresql-client-17 + rclone
+      - name: Install postgresql-client-18 + rclone
         run: |
           set -euo pipefail
           # ASCII-armored key via signed-by (apt accepts .asc directly — no gpg/tty)
@@ -29,8 +29,14 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
           sudo apt-get update
-          sudo apt-get install -y postgresql-client-17
+          # Server is PG18 (archive format 1.16) — use a v18 client so pg_dump AND
+          # pg_restore are the SAME version. Force the real v18 binaries onto PATH
+          # ahead of the Debian pg_wrapper to avoid mixed-version ambiguity.
+          sudo apt-get install -y postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
           curl -fsSL https://rclone.org/install.sh | sudo bash
+          /usr/lib/postgresql/18/bin/pg_dump --version
+          /usr/lib/postgresql/18/bin/pg_restore --version
 
       - name: Write rclone config
         run: |
