@@ -48,16 +48,25 @@ for t in "${TGTS[@]}"; do
   fi
   log "target #$idx dump fetched + verified ($(du -h "$f" | cut -f1))"
 
-  # Clean slate: drop the app schema(s) wholesale (CASCADE clears the FK web in one
-  # shot) so the load never hits per-object drop-order errors. Discover schemas
-  # dynamically — keep system + public, drop the rest — so no project schema name
-  # lives in this public repo. The dump recreates its own schema(s) on restore.
-  schemas="$(psql "$url" -Atc "SELECT nspname FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema','pg_toast','public') AND nspname NOT LIKE 'pg_temp%' AND nspname NOT LIKE 'pg_toast_temp%';" 2>/dev/null || true)"
-  if [ -n "$schemas" ]; then
-    while IFS= read -r s; do
-      [ -z "$s" ] && continue
-      psql "$url" -q -c "DROP SCHEMA IF EXISTS \"$s\" CASCADE;" >/dev/null 2>&1 || true
-    done <<< "$schemas"
+  # Clean slate: drop every non-system schema (including public — the app puts
+  # objects in both) and recreate public, so the dump's CREATE TYPE/TABLE never
+  # collide with leftovers. CASCADE clears the FK web in one shot. One DO block,
+  # ON_ERROR_STOP surfaces real failures. No project schema name in this public repo.
+  if ! perr="$(psql "$url" -v ON_ERROR_STOP=1 -q 2>&1 <<'SQL'
+DO $$
+DECLARE s text;
+BEGIN
+  FOR s IN SELECT nspname FROM pg_namespace
+    WHERE nspname NOT IN ('pg_catalog','information_schema','pg_toast')
+      AND nspname NOT LIKE 'pg_temp%' AND nspname NOT LIKE 'pg_toast_temp%'
+  LOOP EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', s); END LOOP;
+  EXECUTE 'CREATE SCHEMA IF NOT EXISTS public';
+END $$;
+SQL
+)"; then
+    safe="$(printf '%s' "$perr" | sed -E 's#/[^[:space:]]*##g; s/[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*//g' | tr '\n' ' ')"
+    log "ERROR: standby prep failed for target #$idx: ${safe}"
+    rm -f "$f"; fail=1; continue
   fi
 
   # Load atomically: --single-transaction = all-or-nothing, standby never left half-built.
