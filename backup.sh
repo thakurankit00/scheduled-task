@@ -37,8 +37,10 @@ for pair in "${PAIRS[@]}"; do
   remote="${RCLONE_DEST}/${sub}"
   log "=== target #$idx ==="
 
+  # Sequential, single-threaded (no --jobs) = gentlest on a shared server.
+  # --lock-wait-timeout: never block app DDL for more than 10s waiting on a lock.
   if ! pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$db" \
-        --format=custom --no-owner --no-privileges --file="$file"; then
+        --format=custom --no-owner --no-privileges --lock-wait-timeout=10000 --file="$file"; then
     log "ERROR: pg_dump failed for target #$idx"; rm -f "$file"; fail=1; continue
   fi
 

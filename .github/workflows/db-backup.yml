@@ -5,7 +5,7 @@ name: db-backup
 
 on:
   schedule:
-    - cron: '*/5 * * * *'    # every 5 min (UTC) — testing; raise to */30 for normal use
+    - cron: '*/10 * * * *'   # every 10 min (UTC)
   workflow_dispatch: {}
 
 concurrency:
