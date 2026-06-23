@@ -1,0 +1,10 @@
+# Local-only secrets — NEVER commit real credentials.
+.env
+.env.*
+!.env.example
+
+# Backup artifacts
+*.dump
+*.sql
+*.log
+tmp/

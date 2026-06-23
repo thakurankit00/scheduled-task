@@ -1,0 +1,54 @@
+name: db-backup
+
+# Required secrets: DB_HOST, DB_USER, PGPASSWORD, DB_TARGETS, RCLONE_DEST, RCLONE_CONF_B64
+# Optional: DB_PORT (default 5432)
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'    # every 5 min (UTC) — testing; raise to */30 for normal use
+  workflow_dispatch: {}
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install postgresql-client-17 + rclone
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+
+      - name: Write rclone config
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/rclone"
+          echo "${{ secrets.RCLONE_CONF_B64 }}" | base64 -d > "$HOME/.config/rclone/rclone.conf"
+          test -s "$HOME/.config/rclone/rclone.conf"
+
+      - name: Run backup
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: require
+          DB_TARGETS: ${{ secrets.DB_TARGETS }}
+          RCLONE_DEST: ${{ secrets.RCLONE_DEST }}
+          RCLONE_CONFIG: /home/runner/.config/rclone/rclone.conf
+          RETENTION_AGE: '24h'
+        run: |
+          chmod +x ./backup.sh
+          ./backup.sh
