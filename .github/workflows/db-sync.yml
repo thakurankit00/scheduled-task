@@ -1,0 +1,58 @@
+name: db-sync
+
+# WARM STANDBY SYNC — for each target, pull the newest verified dump from Drive and
+# restore it into that target's standby DB (wipes existing objects first). Automated.
+#
+# SAFETY (public repo): standby DB URLs carry passwords -> SECRETS, never inputs
+# (inputs show in the world-readable run summary). Logs use generic "target #N";
+# URLs are masked. SYNC_TARGETS maps each db+subfolder to the secret that holds its URL.
+#
+# Required secrets: RCLONE_DEST, RCLONE_CONF_B64, SYNC_TARGETS, STANDBY_URL_1, STANDBY_URL_2
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # backstop; cron-job.org dispatches for punctuality
+  workflow_dispatch: {}
+
+concurrency:
+  group: db-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install postgresql-client-18 + rclone
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo tee /usr/share/keyrings/pgdg.asc > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+
+      - name: Write rclone config
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/rclone"
+          echo "${{ secrets.RCLONE_CONF_B64 }}" | base64 -d > "$HOME/.config/rclone/rclone.conf"
+          test -s "$HOME/.config/rclone/rclone.conf"
+
+      - name: Sync standbys
+        env:
+          RCLONE_CONFIG: /home/runner/.config/rclone/rclone.conf
+          RCLONE_DEST: ${{ secrets.RCLONE_DEST }}
+          SYNC_TARGETS: ${{ secrets.SYNC_TARGETS }}
+          STANDBY_URL_1: ${{ secrets.STANDBY_URL_1 }}
+          STANDBY_URL_2: ${{ secrets.STANDBY_URL_2 }}
+          PGSSLMODE: require
+        run: |
+          chmod +x ./sync-standby.sh
+          ./sync-standby.sh
